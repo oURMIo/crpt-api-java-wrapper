@@ -1,5 +1,3 @@
-package main.java.com.home.freespace.work;
-
 import okhttp3.MediaType;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
@@ -12,6 +10,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -22,6 +21,7 @@ public class CrptApi {
     private final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1);
     private final AtomicInteger requestCount = new AtomicInteger(0);
     private final Lock lock = new ReentrantLock();
+    private final Condition notFull = lock.newCondition();
     private final OkHttpClient client = new OkHttpClient();
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -32,14 +32,20 @@ public class CrptApi {
     }
 
     private void resetRequestCount() {
-        requestCount.set(0);
+        lock.lock();
+        try {
+            requestCount.set(0);
+            notFull.signalAll();
+        } finally {
+            lock.unlock();
+        }
     }
 
     public void createDocument(Document document, String signature) throws InterruptedException, IOException {
         lock.lock();
         try {
             while (requestCount.get() >= requestLimit) {
-                Thread.sleep(timeUnit.toMillis(1));
+                notFull.await(1, timeUnit);
             }
             requestCount.incrementAndGet();
         } finally {
@@ -95,4 +101,3 @@ public class CrptApi {
         }
     }
 }
-
