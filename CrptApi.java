@@ -6,6 +6,7 @@ import okhttp3.Response;
 
 import java.io.IOException;
 import java.time.LocalDate;
+import java.util.Objects;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -18,6 +19,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 public class CrptApi {
     private final TimeUnit timeUnit;
     private final int requestLimit;
+
     private final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1);
     private final AtomicInteger requestCount = new AtomicInteger(0);
     private final Lock lock = new ReentrantLock();
@@ -26,31 +28,16 @@ public class CrptApi {
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     public CrptApi(TimeUnit timeUnit, int requestLimit) {
-        this.timeUnit = timeUnit;
+        this.timeUnit = Objects.requireNonNull(timeUnit, "timeUnit");
+        if (requestLimit <= 0) {
+            throw new IllegalArgumentException("Wrong request limit per timeUnit, limit = " + requestLimit);
+        }
         this.requestLimit = requestLimit;
         scheduler.scheduleAtFixedRate(this::resetRequestCount, 0, 1, timeUnit);
     }
 
-    private void resetRequestCount() {
-        lock.lock();
-        try {
-            requestCount.set(0);
-            notFull.signalAll();
-        } finally {
-            lock.unlock();
-        }
-    }
-
     public void createDocument(Document document, String signature) throws InterruptedException, IOException {
-        lock.lock();
-        try {
-            while (requestCount.get() >= requestLimit) {
-                notFull.await(1, timeUnit);
-            }
-            requestCount.incrementAndGet();
-        } finally {
-            lock.unlock();
-        }
+        checkRequestLimitAndWaitIfNecessary();
 
         String json = objectMapper.writeValueAsString(document);
         RequestBody body = RequestBody.create(json, MediaType.get("application/json; charset=utf-8"));
@@ -66,6 +53,28 @@ public class CrptApi {
             if (!response.isSuccessful()) {
                 throw new IOException("Unexpected code " + response);
             }
+        }
+    }
+
+    private void resetRequestCount() {
+        lock.lock();
+        try {
+            requestCount.set(0);
+            notFull.signalAll();
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    private void checkRequestLimitAndWaitIfNecessary() throws InterruptedException {
+        lock.lock();
+        try {
+            while (requestCount.get() >= requestLimit) {
+                notFull.await(1, timeUnit);
+            }
+            requestCount.incrementAndGet();
+        } finally {
+            lock.unlock();
         }
     }
 
